@@ -351,34 +351,35 @@ void update_route_table(struct sr_instance *sr,
         }
 
         if (!rt_entry) printf("error: destination not found in routing table\n");
-        
-        if (rt_entry && rt_entry->metric != INFINITY) { /* if RT contains a distance to the RIP entry's destination */
-            if (ip_packet->ip_src == rt_entry->gw.s_addr) { /* if RIP packet source is the current next hop to the destination */
-                changed = 1;
-                rt_entry->updated_time = time(NULL);
-                rt_entry->metric = metric;
-            }
-            else { /* if RIP packet source is not the current next hop to the destination*/
-                if (rt_entry->metric > metric) { /* if new path is shorter */
+        else if (rt_entry) {
+            if (rt_entry->metric != INFINITY) { /* if RT contains a distance to the RIP entry's destination */
+                if (ip_packet->ip_src == rt_entry->gw.s_addr) { /* if RIP packet source is the current next hop to the destination */
                     changed = 1;
-                    rt_entry->gw.s_addr = ip_packet->ip_src;
-                    rt_entry->mask.s_addr = rip_entry.mask;
-                    memcpy(rt_entry->interface, iface, sr_IFACE_NAMELEN);
                     rt_entry->metric = metric;
                     rt_entry->updated_time = time(NULL);
                 }
-                else if (rt_entry->metric <= metric) {
-                    /* do nothing */
+                else { /* if RIP packet source is not the current next hop to the destination*/
+                    if (rt_entry->metric > metric) { /* if new path is shorter */
+                        changed = 1;
+                        rt_entry->gw.s_addr = ip_packet->ip_src;
+                        rt_entry->mask.s_addr = rip_entry.mask;
+                        memcpy(rt_entry->interface, iface, sr_IFACE_NAMELEN);
+                        rt_entry->metric = metric;
+                        rt_entry->updated_time = time(NULL);
+                    }
+                    else if (rt_entry->metric <= metric) { /* if new path is not shorter */
+                        /* do nothing */
+                    }
                 }
             }
-        }
-        else if (rt_entry && rt_entry->metric == INFINITY) { /* if RT doesn't contain distance to RIP entry's destination */
-            changed = 1;
-            rt_entry->gw.s_addr = rip_entry.next_hop;
-            rt_entry->mask.s_addr = rip_entry.mask;
-            memcpy(rt_entry->interface, iface, sr_IFACE_NAMELEN);
-            rt_entry->metric = metric;
-            rt_entry->updated_time = time(NULL);
+            else if (rt_entry->metric == INFINITY) { /* if RT doesn't contain distance to RIP entry's destination */
+                changed = 1;
+                rt_entry->gw.s_addr = rip_entry.next_hop;
+                rt_entry->mask.s_addr = rip_entry.mask;
+                memcpy(rt_entry->interface, iface, sr_IFACE_NAMELEN);
+                rt_entry->metric = metric;
+                rt_entry->updated_time = time(NULL);
+            }
         }
     }
     if (changed) {
