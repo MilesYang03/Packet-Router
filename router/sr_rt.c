@@ -228,25 +228,25 @@ void *sr_rip_timeout(void *sr_ptr) {
         struct sr_rt *rt_entry;
         struct sr_if *interface;
 
-        // 1. Check for expired entries and set metric to INFINITY
+        /* 1. Check for expired entries and set metric to INFINITY */
         for (rt_entry = sr->routing_table; rt_entry; rt_entry = rt_entry->next) {
             if (current_time - rt_entry->updated_time >= 20) {
                 rt_entry->metric = INFINITY;
             }
         }
 
-        // 2. Check interface status and update routing table
+        /* 2. Check interface status and update routing table */
         for (interface = sr->if_list; interface; interface = interface->next) {
             uint32_t interface_status = sr_obtain_interface_status(sr, interface->name);
-            if (interface_status == 0) { // Interface is down
-                // Remove routes using this interface
+            if (interface_status == 0) { /* Interface is down */
+                /* Remove routes using this interface */
                 for (rt_entry = sr->routing_table; rt_entry; rt_entry = rt_entry->next) {
                     if (strcmp(rt_entry->interface, interface->name) == 0) {
                         rt_entry->metric = INFINITY;
                     }
                 }
-            } else { // Interface is up
-                // Check if the directly connected subnet is in the routing table
+            } else { /* Interface is up */
+                /* Check if the directly connected subnet is in the routing table */
                 int found = 0;
                 for (rt_entry = sr->routing_table; rt_entry; rt_entry = rt_entry->next) {
                     if (rt_entry->dest.s_addr == (interface->ip & interface->mask)) {
@@ -256,7 +256,7 @@ void *sr_rip_timeout(void *sr_ptr) {
                     }
                 }
                 if (!found) {
-                    // Add the directly connected subnet to the routing table
+                    /* Add the directly connected subnet to the routing table */
                     struct in_addr dest_addr;
                     dest_addr.s_addr = (interface->ip & interface->mask);
                     sr_add_rt_entry(sr, dest_addr, interface->ip, interface->mask, 0, interface->name);
@@ -264,7 +264,7 @@ void *sr_rip_timeout(void *sr_ptr) {
             }
         }
 
-        // 3. Send RIP response on all interfaces
+        /* 3. Send RIP response on all interfaces */
         send_rip_update(sr);
 
         pthread_mutex_unlock(&(sr->rt_lock));
@@ -386,7 +386,7 @@ void update_route_table(struct sr_instance *sr,
         int metric = INFINITY;
         if (rip_entry.metric+1 < INFINITY) metric = rip_entry.metric+1;
 
-        /* find RIP entry's destination's routing table entry */
+        /* 1. find RIP entry's destination's routing table entry */
         struct sr_rt* rt_entry;
         for (rt_entry = sr->routing_table; rt_entry; rt_entry = rt_entry->next) {
             if (rip_entry.address == rt_entry->dest.s_addr) break;
@@ -394,13 +394,25 @@ void update_route_table(struct sr_instance *sr,
 
         if (!rt_entry) printf("error: destination not found in routing table\n");
         else if (rt_entry) {
-            if (rt_entry->metric != INFINITY) { /* if RT contains a distance to the RIP entry's destination */
-                if (ip_packet->ip_src == rt_entry->gw.s_addr) { /* if RIP packet source is the current next hop to the destination */
+            /* a. if RT doesn't contain distance to RIP entry's destination */
+            if (rt_entry->metric == INFINITY) {
+                changed = 1;
+                rt_entry->gw.s_addr = rip_entry.next_hop;
+                rt_entry->mask.s_addr = rip_entry.mask;
+                memcpy(rt_entry->interface, iface, sr_IFACE_NAMELEN);
+                rt_entry->metric = metric;
+                rt_entry->updated_time = time(NULL);
+            }
+            /* b. if RT contains a distance to the RIP entry's destination */
+            else if (rt_entry->metric != INFINITY) {
+                /* i. if RIP packet source is the current next hop to the destination */
+                if (ip_packet->ip_src == rt_entry->gw.s_addr) {
                     changed = 1;
                     rt_entry->metric = metric;
                     rt_entry->updated_time = time(NULL);
                 }
-                else { /* if RIP packet source is not the current next hop to the destination*/
+                /* ii. if RIP packet source is not the current next hop to the destination*/
+                else {
                     if (rt_entry->metric > metric) { /* if new path is shorter */
                         changed = 1;
                         rt_entry->gw.s_addr = ip_packet->ip_src;
@@ -414,16 +426,9 @@ void update_route_table(struct sr_instance *sr,
                     }
                 }
             }
-            else if (rt_entry->metric == INFINITY) { /* if RT doesn't contain distance to RIP entry's destination */
-                changed = 1;
-                rt_entry->gw.s_addr = rip_entry.next_hop;
-                rt_entry->mask.s_addr = rip_entry.mask;
-                memcpy(rt_entry->interface, iface, sr_IFACE_NAMELEN);
-                rt_entry->metric = metric;
-                rt_entry->updated_time = time(NULL);
-            }
         }
     }
+    /* 2. */
     if (changed) {
         send_rip_update(sr);
     }
