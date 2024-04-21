@@ -223,7 +223,33 @@ void *sr_rip_timeout(void *sr_ptr) {
     while (1) {
         sleep(5);
         pthread_mutex_lock(&(sr->rt_lock));
-        /* Fill your code here */
+        
+        time_t current_time = time(NULL);
+        struct sr_rt *rt_entry, *prev_entry = NULL;
+
+        // Iterate through the routing table
+        for (rt_entry = sr->routing_table; rt_entry; rt_entry = rt_entry->next) {
+            // Check if the entry has expired (not updated in 20 seconds)
+            if (current_time - rt_entry->updated_time >= 20) {
+                // Remove the expired entry
+                if (prev_entry) {
+                    prev_entry->next = rt_entry->next;
+                } else {
+                    sr->routing_table = rt_entry->next;
+                }
+                free(rt_entry);
+                // Adjust loop variables
+                rt_entry = prev_entry ? prev_entry->next : sr->routing_table;
+            } else {
+                prev_entry = rt_entry;
+            }
+        }
+
+        // Send RIP response on all interfaces
+        send_rip_update(sr);
+
+
+
         
         pthread_mutex_unlock(&(sr->rt_lock));
     }
