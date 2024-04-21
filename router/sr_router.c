@@ -296,10 +296,51 @@ void sr_handlepacket(struct sr_instance* sr,
   else if (ethertype(packet) == ethertype_ip) {
 
     sr_ip_hdr_t* ip_header = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
+    /* handle RIP packets HERE*/
+    if (ip_header->ip_dst == 0xFFFFFFFF) {
+      sr_udp_hdr_t* udp_header = (sr_udp_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+      if (ip_header->ip_p == ip_protocol_udp) {
+        if (ntohs(udp_header->port_src) == 520 && ntohs(udp_header->port_dst) == 520) { /* if this is true, then it is RIP packet*/
+          struct sr_rip_pkt_t* rip_packet = (sr_rip_pkt_t*)(packet+sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t));
+          if (rip_packet->command == 1) { /* I think command 1 is request CHECK THIS!!! */
+            send_rip_update(sr);
+          } 
+          else if (rip_packet->command == 2) {
+            update_route_table(sr, ip_header, rip_packet, interface);
+          }
+        }  
+      }
+      else {
+        /* send port unreachable packet back to the source IP */
+        uint8_t* tosend_t33 = malloc(sizeof(sr_ethernet_hdr_t)+ sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+        memset(tosend_t33, 0, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+
+        make_icmp3_packet(tosend_t33, recieving_interface, ethernet_header, ip_header, 3, 3);
+
+        /*print_hdrs(tosend_t33, sizeof( sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t)));*/
+
+        sr_send_packet(sr, tosend_t33, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t), interface);
+        free(tosend_t33);
+        return;
+      }
+    }
+
     /*Check if packet is adressed to one of this server's interfaces*/ 
     struct sr_if* current_interface = sr->if_list;
     while (current_interface != NULL) {                                       /*Iterate through router interfaces to see if any interface ips match the request IP*/
         if (current_interface->ip == ip_header->ip_dst) {
+          /* UPDATED RIP check using sr_obtain_interface_status */
+          if (!sr_obtain_interface_status(sr, current_interface->name)) {
+            uint8_t* tosend_t30 = malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+            memset(tosend_t30, 0, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+            
+            make_icmp3_packet(tosend_t30, recieving_interface, ethernet_header, ip_header, 3, 0);
+          
+            /*print_hdrs(tosend_t30, len);*/
+            sr_send_packet(sr, tosend_t30, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t), current_interface->name);
+            free(tosend_t30);
+            return;
+          }
           /* Deal with ICMP packets*/
           if (ip_header->ip_p == ip_protocol_icmp) {
             sr_icmp_hdr_t* icmp_header = (sr_icmp_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
@@ -400,12 +441,25 @@ void sr_handlepacket(struct sr_instance* sr,
 
     /* forward if it does match an interface */
     else {
+      /* updated RIP forwarding logic HERE */
+      if (!sr_obtain_interface_status(sr, table_entry_tosend->interface)) {
+        uint8_t* tosend_t30 = malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+        memset(tosend_t30, 0, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+        
+        make_icmp3_packet(tosend_t30, recieving_interface, ethernet_header, ip_header, 3, 0);
+      
+        /*print_hdrs(tosend_t30, len);*/
+        sr_send_packet(sr, tosend_t30, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t), interface);
+        free(tosend_t30); /* destination NET unreachable*/
+        return; 
+      }
       /* sr_arpcache_dump(&sr->cache); */
-      struct sr_arpentry* entry = sr_arpcache_lookup(&sr->cache, table_entry_tosend->dest.s_addr);
+      uint32_t next_hop_ip = (table_entry_tosend->gw.s_addr == 0) ? ip_header->ip_dst : table_entry_tosend->gw.s_addr; /* UPDATED CODE: per the instructions use dest IP address to find eth_dst MAC address */
+      struct sr_arpentry* entry = sr_arpcache_lookup(&sr->cache, next_hop_ip);
       struct sr_if* interface_tosend = sr_get_interface(sr, table_entry_tosend->interface);
 
       if (entry == NULL){
-        struct sr_arpreq* req = sr_arpcache_queuereq(&sr->cache, table_entry_tosend->dest.s_addr, packet, len, table_entry_tosend->interface);
+        struct sr_arpreq* req = sr_arpcache_queuereq(&sr->cache, next_hop_ip, packet, len, table_entry_tosend->interface);
         handle_arpreq(sr, req);
       }
 
