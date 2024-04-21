@@ -223,29 +223,50 @@ void *sr_rip_timeout(void *sr_ptr) {
     while (1) {
         sleep(5);
         pthread_mutex_lock(&(sr->rt_lock));
-        
-        time_t current_time = time(NULL);
-        struct sr_rt *rt_entry, *prev_entry = NULL;
 
-        /* Iterate through the routing table */
+        time_t current_time = time(NULL);
+        struct sr_rt *rt_entry;
+        struct sr_if *interface;
+
+        // 1. Check for expired entries and set metric to INFINITY
         for (rt_entry = sr->routing_table; rt_entry; rt_entry = rt_entry->next) {
-            /* Check if the entry has expired (not updated in 20 seconds) */
             if (current_time - rt_entry->updated_time >= 20) {
-                /* Remove the expired entry */
-                if (prev_entry) {
-                    prev_entry->next = rt_entry->next;
-                } else {
-                    sr->routing_table = rt_entry->next;
-                }
-                free(rt_entry);
-                /* Adjust loop variables */
-                rt_entry = prev_entry ? prev_entry->next : sr->routing_table;
-            } else {
-                prev_entry = rt_entry;
+                rt_entry->metric = INFINITY;
             }
         }
+
+        // 2. Check interface status and update routing table
+        for (interface = sr->if_list; interface; interface = interface->next) {
+            uint32_t interface_status = sr_obtain_interface_status(sr, interface->name);
+            if (interface_status == 0) { // Interface is down
+                // Remove routes using this interface
+                for (rt_entry = sr->routing_table; rt_entry; rt_entry = rt_entry->next) {
+                    if (strcmp(rt_entry->interface, interface->name) == 0) {
+                        rt_entry->metric = INFINITY;
+                    }
+                }
+            } else { // Interface is up
+                // Check if the directly connected subnet is in the routing table
+                int found = 0;
+                for (rt_entry = sr->routing_table; rt_entry; rt_entry = rt_entry->next) {
+                    if (rt_entry->dest.s_addr == (interface->ip & interface->mask)) {
+                        rt_entry->updated_time = current_time;
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    // Add the directly connected subnet to the routing table
+                    struct in_addr dest_addr;
+                    dest_addr.s_addr = (interface->ip & interface->mask);
+                    sr_add_rt_entry(sr, dest_addr, interface->ip, interface->mask, 0, interface->name);
+                }
+            }
+        }
+
+        // 3. Send RIP response on all interfaces
         send_rip_update(sr);
-        
+
         pthread_mutex_unlock(&(sr->rt_lock));
     }
     return NULL;
