@@ -146,6 +146,8 @@ void make_icmp3_packet (
 
         sr_ip_hdr_t* ip_header_temp = (sr_ip_hdr_t*)(tosend + sizeof(sr_ethernet_hdr_t));
         memcpy(ip_header_temp, ip_header, sizeof(sr_ip_hdr_t));
+        ip_header_temp->ip_hl = 5;
+        ip_header_temp->ip_v = 4;
         ip_header_temp->ip_tos = 0;
         ip_header_temp->ip_len = htons(sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
         ip_header_temp->ip_p = ip_protocol_icmp;
@@ -302,7 +304,7 @@ void sr_handlepacket(struct sr_instance* sr,
       if (ip_header->ip_p == ip_protocol_udp) {
         if (ntohs(udp_header->port_src) == 520 && ntohs(udp_header->port_dst) == 520) { /* if this is true, then it is RIP packet*/
           sr_rip_pkt_t* rip_packet = (sr_rip_pkt_t*)(packet+sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t));
-          if (rip_packet->command == 1) { /* I think command 1 is request CHECK THIS!!! */
+          if (rip_packet->command == 1) {
             send_rip_update(sr);
           } 
           else if (rip_packet->command == 2) {
