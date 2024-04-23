@@ -256,11 +256,17 @@ void *sr_rip_timeout(void *sr_ptr) {
                     }
                 }
                 if (!found) {
-                    /* Add the directly connected subnet to the routing table */
+                     /*
                     struct in_addr dest_addr;
-                    dest_addr.s_addr = (interface->ip & interface->mask);
-                    sr_add_rt_entry(sr, dest_addr, interface->ip, interface->mask, 0, interface->name);
+                    dest_addr.s_addr = interface->ip & interface->mask; 
+                    struct in_addr gw_addr;
+                    memset(&gw_addr, 0, sizeof(struct in_addr)); 
+                    struct in_addr mask_addr;
+                    mask_addr.s_addr = interface->mask;
+                    sr_add_rt_entry(sr, dest_addr, gw_addr, mask_addr, 1, interface->name); 
+                    */
                 }
+
             }
         }
 
