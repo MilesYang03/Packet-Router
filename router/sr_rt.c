@@ -321,6 +321,7 @@ void send_rip_request(struct sr_instance *sr){
             rip_packet->entries[i].metric = 0;
         }
         sr_send_packet(sr, rip_request, sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t), current_interface->name);
+        free(rip_request);
     }
 }
 
@@ -366,24 +367,41 @@ void send_rip_update(struct sr_instance *sr){
         for (rt_entry = sr->routing_table; rt_entry && i < MAX_NUM_ENTRIES; rt_entry = rt_entry->next) {
             /* split horizon using interfaces */
             if (strcmp(rt_entry->interface, current_interface->name) == 0) {
-                printf("split horizon on RT entry for %d using interface names\n", rt_entry->gw.s_addr);
+                printf("split horizon on RT entry for %d\n", rt_entry->gw.s_addr);
+                rip_packet->entries[i].afi = htons(AF_INET);
+                rip_packet->entries[i].tag = 0;
+                rip_packet->entries[i].address = 0;
+                rip_packet->entries[i].mask = 0;
+                rip_packet->entries[i].next_hop = 0;
+                rip_packet->entries[i].metric = htonl(INFINITY);
+                i++;
                 continue;
             }
             /* skip over metric==INFINITY entries */
-            if (rt_entry->metric == INFINITY) {
-                printf("skipping INFINITY metric RT entries\n");
+            else if (rt_entry->metric == INFINITY) {
+                printf("skipping INFINITY metric RT entry\n");
+                rip_packet->entries[i].afi = htons(AF_INET);
+                rip_packet->entries[i].tag = 0;
+                rip_packet->entries[i].address = 0;
+                rip_packet->entries[i].mask = 0;
+                rip_packet->entries[i].next_hop = 0;
+                rip_packet->entries[i].metric = htonl(INFINITY);
+                i++;
                 continue;
             }
-            rip_packet->entries[i].afi = htons(AF_INET);
-            rip_packet->entries[i].tag = 0;
-            rip_packet->entries[i].address = rt_entry->dest.s_addr;
-            rip_packet->entries[i].mask = rt_entry->mask.s_addr;
-            rip_packet->entries[i].next_hop = rt_entry->gw.s_addr;
-            rip_packet->entries[i].metric = htonl(rt_entry->metric);
-            i++;
+            else {
+                rip_packet->entries[i].afi = htons(AF_INET);
+                rip_packet->entries[i].tag = 0;
+                rip_packet->entries[i].address = rt_entry->dest.s_addr;
+                rip_packet->entries[i].mask = rt_entry->mask.s_addr;
+                rip_packet->entries[i].next_hop = rt_entry->gw.s_addr;
+                rip_packet->entries[i].metric = htonl(rt_entry->metric);
+                i++;
+            }
         }
 
         sr_send_packet(sr, rip_response, sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t), current_interface->name);
+        free(rip_response);
     }
     pthread_mutex_unlock(&(sr->rt_lock));
 }
