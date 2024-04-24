@@ -256,7 +256,6 @@ void *sr_rip_timeout(void *sr_ptr) {
                     }
                 }
                 if (!found) {
-                     /*
                     struct in_addr dest_addr;
                     dest_addr.s_addr = interface->ip & interface->mask; 
                     struct in_addr gw_addr;
@@ -264,7 +263,6 @@ void *sr_rip_timeout(void *sr_ptr) {
                     struct in_addr mask_addr;
                     mask_addr.s_addr = interface->mask;
                     sr_add_rt_entry(sr, dest_addr, gw_addr, mask_addr, 1, interface->name); 
-                    */
                 }
 
             }
@@ -366,10 +364,12 @@ void send_rip_update(struct sr_instance *sr){
         int i = 0;
         struct sr_rt* rt_entry;
         for (rt_entry = sr->routing_table; rt_entry && i < MAX_NUM_ENTRIES; rt_entry = rt_entry->next) {
-            /* problem might be in here */
-            if (rt_entry->dest.s_addr == current_interface->ip) continue;
+            if (memcmp(&rt_entry->gw.s_addr, &current_interface->ip, sizeof(uint32_t)) == 0) {
+                printf("split horizon on RT entry for %d\n", rt_entry->gw.s_addr);
+                continue;
+            }
             rip_packet->entries[i].afi = htons(AF_INET);
-            rip_packet->entries[i].tag = 0; /* check */
+            rip_packet->entries[i].tag = 0;
             rip_packet->entries[i].address = rt_entry->dest.s_addr;
             rip_packet->entries[i].mask = rt_entry->mask.s_addr;
             rip_packet->entries[i].next_hop = rt_entry->gw.s_addr;
@@ -393,7 +393,7 @@ void update_route_table(struct sr_instance *sr,
     for (i = 0; i < MAX_NUM_ENTRIES; i++) {
         struct entry rip_entry = rip_packet->entries[i];
         uint32_t entry_metric = ntohl(rip_entry.metric);
-        printf("rip_entry.metric: %d, ntohl(rip_entry.metric): %d\n\n", rip_entry.metric, entry_metric);
+        /* printf("rip_entry.metric: %d, ntohl(rip_entry.metric): %d\n\n", rip_entry.metric, entry_metric); */
         if (entry_metric == INFINITY) continue;
 
         int metric = INFINITY;
@@ -407,8 +407,9 @@ void update_route_table(struct sr_instance *sr,
         if (rt_entry) {
             /* a. if RT doesn't contain distance to RIP entry's destination */
             if (rt_entry->metric == INFINITY) {
+                printf("%s is adding a new distance to %d: %d\n", sr->host, rt_entry->dest.s_addr, metric);
                 changed = 1;
-                rt_entry->gw.s_addr = rip_entry.next_hop;
+                rt_entry->gw.s_addr = ip_packet->ip_src;
                 rt_entry->mask.s_addr = rip_entry.mask;
                 memcpy(rt_entry->interface, iface, sr_IFACE_NAMELEN);
                 rt_entry->metric = metric;
@@ -418,7 +419,8 @@ void update_route_table(struct sr_instance *sr,
             else if (rt_entry->metric != INFINITY) {
                 /* i. if RIP packet source is the current next hop to the destination */
                 if (ip_packet->ip_src == rt_entry->gw.s_addr) {
-                    if (rt_entry->metric != metric) {
+                    if (rt_entry->metric > metric) {
+                        printf("%s is replacing a distance to %d: %d\n", sr->host, rt_entry->dest.s_addr, metric);
                         changed = 1;
                         rt_entry->metric = metric;
                     }
@@ -427,7 +429,11 @@ void update_route_table(struct sr_instance *sr,
                 /* ii. if RIP packet source is not the current next hop to the destination*/
                 else if (ip_packet->ip_src != rt_entry->gw.s_addr) {
                     /* if new path is shorter */
-                    if (rt_entry->metric > metric || rt_entry->metric == 0) { /* NOTE: 2nd statement may be wrong */
+                    if (rt_entry->metric > metric || (rt_entry->metric == 0 && rt_entry->gw.s_addr != 0)) { /* NOTE: 2nd statement may be wrong */
+                        if (rt_entry->metric == 0) {
+                            printf("current distance to %d is 0\n", rt_entry->dest.s_addr);
+                        }
+                        printf("%s is creating new path to %d: %d\n", sr->host, rt_entry->dest.s_addr, metric);
                         changed = 1;
                         rt_entry->gw.s_addr = ip_packet->ip_src;
                         rt_entry->mask.s_addr = rip_entry.mask;
@@ -446,7 +452,6 @@ void update_route_table(struct sr_instance *sr,
     pthread_mutex_unlock(&(sr->rt_lock));
     /* 2. */
     if (changed) {
-        printf("something changed\n\n");
         send_rip_update(sr);
     }
 }
