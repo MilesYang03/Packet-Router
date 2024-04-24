@@ -208,12 +208,12 @@ void sr_print_routing_entry(struct sr_rt* entry)
     char buff[20];
     struct tm* timenow = localtime(&(entry->updated_time));
     strftime(buff, sizeof(buff), "%H:%M:%S", timenow);
-    printf("destination: %s\n",inet_ntoa(entry->dest));
-    printf("gateway: %s\n",inet_ntoa(entry->gw));
-    printf("subnet mask: %s\n",inet_ntoa(entry->mask));
-    printf("interface: %s\n",entry->interface);
-    printf("metric: %d\n",entry->metric);
-    printf("buffer: %s\n", buff);
+    printf("%s\t",inet_ntoa(entry->dest));
+    printf("%s\t",inet_ntoa(entry->gw));
+    printf("%s\t",inet_ntoa(entry->mask));
+    printf("%s\t",entry->interface);
+    printf("%d\t",entry->metric);
+    printf("%s\t", buff);
 
 } /* -- sr_print_routing_entry -- */
 
@@ -367,6 +367,11 @@ void send_rip_update(struct sr_instance *sr){
             /* split horizon using interfaces */
             if (strcmp(rt_entry->interface, current_interface->name) == 0) {
                 printf("split horizon on RT entry for %d using interface names\n", rt_entry->gw.s_addr);
+                continue;
+            }
+            /* skip over metric==INFINITY entries */
+            if (rt_entry->metric == INFINITY) {
+                printf("skipping INFINITY metric RT entries\n");
                 continue;
             }
             rip_packet->entries[i].afi = htons(AF_INET);
