@@ -364,8 +364,9 @@ void send_rip_update(struct sr_instance *sr){
         int i = 0;
         struct sr_rt* rt_entry;
         for (rt_entry = sr->routing_table; rt_entry && i < MAX_NUM_ENTRIES; rt_entry = rt_entry->next) {
-            if (memcmp(&rt_entry->gw.s_addr, &current_interface->ip, sizeof(uint32_t)) == 0) {
-                printf("split horizon on RT entry for %d\n", rt_entry->gw.s_addr);
+            /* split horizon using interfaces */
+            if (strcmp(rt_entry->interface, current_interface->name) == 0) {
+                printf("split horizon on RT entry for %d using interface names\n", rt_entry->gw.s_addr);
                 continue;
             }
             rip_packet->entries[i].afi = htons(AF_INET);
@@ -407,7 +408,7 @@ void update_route_table(struct sr_instance *sr,
         if (rt_entry) {
             /* a. if RT doesn't contain distance to RIP entry's destination */
             if (rt_entry->metric == INFINITY) {
-                printf("%s is adding a new distance to %d: %d\n", sr->host, rt_entry->dest.s_addr, metric);
+                /* printf("%s is adding a new distance to %d: %d\n", sr->host, rt_entry->dest.s_addr, metric); */
                 changed = 1;
                 rt_entry->gw.s_addr = ip_packet->ip_src;
                 rt_entry->mask.s_addr = rip_entry.mask;
