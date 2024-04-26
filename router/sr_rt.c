@@ -183,7 +183,6 @@ void sr_print_routing_table(struct sr_instance* sr)
     printf("Destination\tGateway\t\tMask\t\tIface\tMetric\tUpdate_Time\n");
 
     rt_walker = sr->routing_table;
-    
     while(rt_walker){
         if (rt_walker->metric < INFINITY)
             sr_print_routing_entry(rt_walker);
@@ -221,7 +220,7 @@ void sr_print_routing_entry(struct sr_rt* entry)
 void *sr_rip_timeout(void *sr_ptr) {
     struct sr_instance *sr = sr_ptr;
     while (1) {
-        sleep(5);
+        /* sleep(5); */
         pthread_mutex_lock(&(sr->rt_lock));
 
         time_t current_time = time(NULL);
@@ -295,6 +294,8 @@ void send_rip_request(struct sr_instance *sr){
         ip_header->ip_v = 4;
         ip_header->ip_tos = 0;
         ip_header->ip_len = htons(sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
+        ip_header->ip_id = 0;
+        ip_header->ip_off = 0;
         ip_header->ip_p = ip_protocol_udp;
         ip_header->ip_dst = htonl(0xFFFFFFFF);
         uint32_t interface_ip = current_interface->ip;
@@ -345,6 +346,8 @@ void send_rip_update(struct sr_instance *sr){
         ip_header->ip_v = 4;
         ip_header->ip_tos = 0;
         ip_header->ip_len = htons(sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
+        ip_header->ip_id = 0;
+        ip_header->ip_off = 0;
         ip_header->ip_p = ip_protocol_udp;
         ip_header->ip_dst = htonl(0xFFFFFFFF);
         uint32_t interface_ip = current_interface->ip;
@@ -365,8 +368,8 @@ void send_rip_update(struct sr_instance *sr){
         int i = 0;
         struct sr_rt* rt_entry;
         for (rt_entry = sr->routing_table; rt_entry && i < MAX_NUM_ENTRIES; rt_entry = rt_entry->next) {
-            /* split horizon using interfaces */
-            if (strcmp(rt_entry->interface, current_interface->name) == 0) {
+            /* split horizon */
+            if ((current_interface->ip & current_interface->mask) == (rt_entry->gw.s_addr & rt_entry->mask.s_addr)) {
                 printf("split horizon on RT entry for %d\n", rt_entry->gw.s_addr);
                 rip_packet->entries[i].afi = htons(AF_INET);
                 rip_packet->entries[i].tag = 0;
@@ -375,19 +378,6 @@ void send_rip_update(struct sr_instance *sr){
                 rip_packet->entries[i].next_hop = 0;
                 rip_packet->entries[i].metric = htonl(INFINITY);
                 i++;
-                continue;
-            }
-            /* skip over metric==INFINITY entries */
-            else if (rt_entry->metric == INFINITY) {
-                printf("skipping INFINITY metric RT entry\n");
-                rip_packet->entries[i].afi = htons(AF_INET);
-                rip_packet->entries[i].tag = 0;
-                rip_packet->entries[i].address = 0;
-                rip_packet->entries[i].mask = 0;
-                rip_packet->entries[i].next_hop = 0;
-                rip_packet->entries[i].metric = htonl(INFINITY);
-                i++;
-                continue;
             }
             else {
                 rip_packet->entries[i].afi = htons(AF_INET);
@@ -417,58 +407,61 @@ void update_route_table(struct sr_instance *sr,
     for (i = 0; i < MAX_NUM_ENTRIES; i++) {
         struct entry rip_entry = rip_packet->entries[i];
         uint32_t entry_metric = ntohl(rip_entry.metric);
-        /* printf("rip_entry.metric: %d, ntohl(rip_entry.metric): %d\n\n", rip_entry.metric, entry_metric); */
-        if (entry_metric == INFINITY) continue;
-
         int metric = INFINITY;
-        if (entry_metric+1 < INFINITY) metric = entry_metric+1;
-
+        if (entry_metric+1 < INFINITY) {
+            metric = entry_metric+1;
+        }
         /* 1. find RIP entry's destination's routing table entry */
         struct sr_rt* rt_entry;
+        int found = 0;
         for (rt_entry = sr->routing_table; rt_entry; rt_entry = rt_entry->next) {
-            if (rip_entry.address == rt_entry->dest.s_addr) break;
-        }
-        if (rt_entry) {
-            /* a. if RT doesn't contain distance to RIP entry's destination */
-            if (rt_entry->metric == INFINITY) {
-                /* printf("%s is adding a new distance to %d: %d\n", sr->host, rt_entry->dest.s_addr, metric); */
-                changed = 1;
-                rt_entry->gw.s_addr = ip_packet->ip_src;
-                rt_entry->mask.s_addr = rip_entry.mask;
-                memcpy(rt_entry->interface, iface, sr_IFACE_NAMELEN);
-                rt_entry->metric = metric;
-                rt_entry->updated_time = time(NULL);
+            if (rip_entry.address == rt_entry->dest.s_addr) {
+                found = 1;
+                break;
             }
-            /* b. if RT contains a distance to the RIP entry's destination */
-            else if (rt_entry->metric != INFINITY) {
-                /* i. if RIP packet source is the current next hop to the destination */
-                if (ip_packet->ip_src == rt_entry->gw.s_addr) {
-                    if (rt_entry->metric > metric) {
-                        printf("%s is replacing a distance to %d: %d\n", sr->host, rt_entry->dest.s_addr, metric);
-                        changed = 1;
-                        rt_entry->metric = metric;
-                    }
+        }
+        /* a. if RT doesn't contain distance to RIP entry's destination */
+        if (!found && metric < INFINITY) {
+            changed = 1;
+            struct in_addr dest, gw, mask;
+            dest.s_addr = rip_entry.address;
+            gw.s_addr = ip_packet->ip_src;
+            mask.s_addr = rip_entry.mask;
+            pthread_mutex_unlock(&(sr->rt_lock));
+            sr_add_rt_entry(sr, dest, gw, mask, metric, iface);
+            pthread_mutex_lock(&(sr->rt_lock));
+            changed = 1;
+        }
+        /* b. if RT contains a distance to the RIP entry's destination */
+        else if (found) {
+            /* i. if RIP packet source is the current next hop to the destination */
+            if (ip_packet->ip_src == rt_entry->gw.s_addr) {
+                if (metric == INFINITY) {
+                    changed = 1;
+                    rt_entry->metric = INFINITY;
                     rt_entry->updated_time = time(NULL);
                 }
-                /* ii. if RIP packet source is not the current next hop to the destination*/
-                else if (ip_packet->ip_src != rt_entry->gw.s_addr) {
-                    /* if new path is shorter */
-                    if (rt_entry->metric > metric || (rt_entry->metric == 0 && rt_entry->gw.s_addr != 0)) { /* NOTE: 2nd statement may be wrong */
-                        if (rt_entry->metric == 0) {
-                            printf("current distance to %d is 0\n", rt_entry->dest.s_addr);
-                        }
-                        printf("%s is creating new path to %d: %d\n", sr->host, rt_entry->dest.s_addr, metric);
-                        changed = 1;
-                        rt_entry->gw.s_addr = ip_packet->ip_src;
-                        rt_entry->mask.s_addr = rip_entry.mask;
-                        memcpy(rt_entry->interface, iface, sr_IFACE_NAMELEN);
-                        rt_entry->metric = metric;
-                        rt_entry->updated_time = time(NULL);
-                    }
-                    /* if new path is not shorter */
-                    else if (rt_entry->metric <= metric) {
-                        /* do nothing */
-                    }
+                else if (rt_entry->metric > metric) {
+                    changed = 1;
+                    rt_entry->metric = metric;
+                    rt_entry->updated_time = time(NULL);
+                }
+                rt_entry->updated_time = time(NULL);
+            }
+            /* ii. if RIP packet source is not the current next hop to the destination*/
+            else if (ip_packet->ip_src != rt_entry->gw.s_addr) {
+                /* if new path is shorter */
+                if (rt_entry->metric > metric) {
+                    changed = 1;
+                    rt_entry->gw.s_addr = ip_packet->ip_src;
+                    rt_entry->mask.s_addr = rip_entry.mask;
+                    memcpy(rt_entry->interface, iface, sr_IFACE_NAMELEN);
+                    rt_entry->metric = metric;
+                    rt_entry->updated_time = time(NULL);
+                }
+                /* if new path is not shorter */
+                else if (rt_entry->metric <= metric) {
+                    /* do nothing */
                 }
             }
         }

@@ -305,9 +305,11 @@ void sr_handlepacket(struct sr_instance* sr,
         if (ntohs(udp_header->port_src) == 520 && ntohs(udp_header->port_dst) == 520) { /* if this is true, then it is RIP packet*/
           sr_rip_pkt_t* rip_packet = (sr_rip_pkt_t*)(packet+sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t));
           if (rip_packet->command == 1) {
+            printf("sr_handle_packet(): %s receiving an RIP request and is sending a response\n", sr->host);
             send_rip_update(sr);
           } 
           else if (rip_packet->command == 2) {
+            printf("sr_handle_packet(): %s receiving an RIP response and is updating its routing table\n", sr->host);
             update_route_table(sr, ip_header, rip_packet, interface);
           }
         }  
