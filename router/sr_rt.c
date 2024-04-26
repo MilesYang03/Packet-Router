@@ -218,6 +218,7 @@ void sr_print_routing_entry(struct sr_rt* entry)
 
 
 void *sr_rip_timeout(void *sr_ptr) {
+    printf("beginning of timeout\n");
     struct sr_instance *sr = sr_ptr;
     while (1) {
         sleep(5);
@@ -277,100 +278,109 @@ void *sr_rip_timeout(void *sr_ptr) {
 }
 
 void send_rip_request(struct sr_instance *sr){
+    uint8_t* rip_request = (uint8_t*) malloc(sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
+    sr_ethernet_hdr_t* ethernet_header = (sr_ethernet_hdr_t*) rip_request;
+    sr_ip_hdr_t* ip_header = (sr_ip_hdr_t*)(rip_request+sizeof(sr_ethernet_hdr_t));
+    sr_udp_hdr_t* udp_header = (sr_udp_hdr_t*)(rip_request+sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t));
+    sr_rip_pkt_t* rip_packet = (sr_rip_pkt_t*)(rip_request+sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t));
+
+    uint8_t broadcast_address[ETHER_ADDR_LEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    memcpy(ethernet_header->ether_dhost, broadcast_address, ETHER_ADDR_LEN);
+    /* ether_shost */
+    ethernet_header->ether_type = htons(ethertype_ip);
+
+    ip_header->ip_hl = 5;
+    ip_header->ip_v = 4;
+    ip_header->ip_tos = 0;
+    ip_header->ip_len = htons(sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
+    ip_header->ip_id = 0;
+    ip_header->ip_off = 0;
+    ip_header->ip_p = ip_protocol_udp;
+    ip_header->ip_dst = htonl(0xFFFFFFFF);
+    /* ip_src */
+    ip_header->ip_ttl = 64;
+    /* ip_sum */
+
+    udp_header->port_src = htons(520);
+    udp_header->port_dst = htons(520);
+    udp_header->udp_len = htons(sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
+    udp_header->udp_sum = 0;
+    udp_header->udp_sum = cksum(udp_header, sizeof(sr_udp_hdr_t));
+
+    rip_packet->command = 1;
+    rip_packet->version = 2;
+    int i;
+    for (i = 0; i < MAX_NUM_ENTRIES; i++) {
+        rip_packet->entries[i].afi = htons(AF_INET);
+        rip_packet->entries[i].tag = 0;
+        rip_packet->entries[i].address = 0;
+        rip_packet->entries[i].mask = 0;
+        rip_packet->entries[i].next_hop = 0;
+        rip_packet->entries[i].metric = 0;
+    }
     struct sr_if* current_interface;
     for (current_interface = sr->if_list; current_interface; current_interface = current_interface->next) {
-        uint8_t* rip_request = (uint8_t*) malloc(sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
-        sr_ethernet_hdr_t* ethernet_header = (sr_ethernet_hdr_t*) rip_request;
-        sr_ip_hdr_t* ip_header = (sr_ip_hdr_t*)(rip_request+sizeof(sr_ethernet_hdr_t));
-        sr_udp_hdr_t* udp_header = (sr_udp_hdr_t*)(rip_request+sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t));
-        sr_rip_pkt_t* rip_packet = (sr_rip_pkt_t*)(rip_request+sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t));
-
-        uint8_t broadcast_address[ETHER_ADDR_LEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-        memcpy(ethernet_header->ether_dhost, broadcast_address, ETHER_ADDR_LEN);
         memcpy(ethernet_header->ether_shost, current_interface->addr, ETHER_ADDR_LEN);
-        ethernet_header->ether_type = htons(ethertype_ip);
 
-        ip_header->ip_hl = 5;
-        ip_header->ip_v = 4;
-        ip_header->ip_tos = 0;
-        ip_header->ip_len = htons(sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
-        ip_header->ip_id = 0;
-        ip_header->ip_off = 0;
-        ip_header->ip_p = ip_protocol_udp;
-        ip_header->ip_dst = htonl(0xFFFFFFFF);
         uint32_t interface_ip = current_interface->ip;
         ip_header->ip_src = interface_ip;
-        ip_header->ip_ttl = 64;
         ip_header->ip_sum = 0;
         ip_header->ip_sum = cksum(ip_header, sizeof(sr_ip_hdr_t));
 
-        udp_header->port_src = htons(520);
-        udp_header->port_dst = htons(520);
-        udp_header->udp_len = htons(sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
-        udp_header->udp_sum = 0;
-        udp_header->udp_sum = cksum(udp_header, sizeof(sr_udp_hdr_t));
-
-        rip_packet->command = 1;
-        rip_packet->version = 2;
-        int i;
-        for (i = 0; i < MAX_NUM_ENTRIES; i++) {
-            rip_packet->entries[i].afi = htons(AF_INET);
-            rip_packet->entries[i].tag = 0;
-            rip_packet->entries[i].address = 0;
-            rip_packet->entries[i].mask = 0;
-            rip_packet->entries[i].next_hop = 0;
-            rip_packet->entries[i].metric = 0;
-        }
         sr_send_packet(sr, rip_request, sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t), current_interface->name);
-        free(rip_request);
     }
+    free(rip_request);
 }
 
 void send_rip_update(struct sr_instance *sr){
     pthread_mutex_lock(&(sr->rt_lock));
 
+    uint8_t* rip_response = (uint8_t*) malloc(sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
+    sr_ethernet_hdr_t* ethernet_header = (sr_ethernet_hdr_t*) rip_response;
+    sr_ip_hdr_t* ip_header = (sr_ip_hdr_t*)(rip_response+sizeof(sr_ethernet_hdr_t));
+    sr_udp_hdr_t* udp_header = (sr_udp_hdr_t*)(rip_response+sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t));
+    sr_rip_pkt_t* rip_packet = (sr_rip_pkt_t*)(rip_response+sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t));
+
+    uint8_t broadcast_address[ETHER_ADDR_LEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    memcpy(ethernet_header->ether_dhost, broadcast_address, ETHER_ADDR_LEN);
+    /* ether_shost */
+    ethernet_header->ether_type = htons(ethertype_ip);
+
+    ip_header->ip_hl = 5;
+    ip_header->ip_v = 4;
+    ip_header->ip_tos = 0;
+    ip_header->ip_len = htons(sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
+    ip_header->ip_id = 0;
+    ip_header->ip_off = 0;
+    ip_header->ip_p = ip_protocol_udp;
+    ip_header->ip_dst = htonl(0xFFFFFFFF);
+    /* ip_src */
+    ip_header->ip_ttl = 64;
+    /* ip_sum */
+
+    udp_header->port_src = htons(520);
+    udp_header->port_dst = htons(520);
+    udp_header->udp_len = htons(sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
+    udp_header->udp_sum = 0;
+    udp_header->udp_sum = cksum(udp_header, sizeof(sr_udp_hdr_t));
+
+    rip_packet->command = 2;
+    rip_packet->version = 2;
+
     struct sr_if* current_interface;
     for (current_interface = sr->if_list; current_interface; current_interface = current_interface->next) {
-        uint8_t* rip_response = (uint8_t*) malloc(sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
-        sr_ethernet_hdr_t* ethernet_header = (sr_ethernet_hdr_t*) rip_response;
-        sr_ip_hdr_t* ip_header = (sr_ip_hdr_t*)(rip_response+sizeof(sr_ethernet_hdr_t));
-        sr_udp_hdr_t* udp_header = (sr_udp_hdr_t*)(rip_response+sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t));
-        sr_rip_pkt_t* rip_packet = (sr_rip_pkt_t*)(rip_response+sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t));
-
-        uint8_t broadcast_address[ETHER_ADDR_LEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-        memcpy(ethernet_header->ether_dhost, broadcast_address, ETHER_ADDR_LEN);
         memcpy(ethernet_header->ether_shost, current_interface->addr, ETHER_ADDR_LEN);
-        ethernet_header->ether_type = htons(ethertype_ip);
 
-        ip_header->ip_hl = 5;
-        ip_header->ip_v = 4;
-        ip_header->ip_tos = 0;
-        ip_header->ip_len = htons(sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
-        ip_header->ip_id = 0;
-        ip_header->ip_off = 0;
-        ip_header->ip_p = ip_protocol_udp;
-        ip_header->ip_dst = htonl(0xFFFFFFFF);
         uint32_t interface_ip = current_interface->ip;
         ip_header->ip_src = interface_ip;
-        ip_header->ip_ttl = 64;
         ip_header->ip_sum = 0;
         ip_header->ip_sum = cksum(ip_header, sizeof(sr_ip_hdr_t));
-
-        udp_header->port_src = htons(520);
-        udp_header->port_dst = htons(520);
-        udp_header->udp_len = htons(sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t));
-        udp_header->udp_sum = 0;
-        udp_header->udp_sum = cksum(udp_header, sizeof(sr_udp_hdr_t));
-
-        rip_packet->command = 2;
-        rip_packet->version = 2;
 
         int i = 0;
         struct sr_rt* rt_entry;
         for (rt_entry = sr->routing_table; rt_entry && i < MAX_NUM_ENTRIES; rt_entry = rt_entry->next) {
             /* split horizon */
             if ((current_interface->ip & current_interface->mask) == (rt_entry->gw.s_addr & rt_entry->mask.s_addr)) {
-                printf("split horizon on RT entry for %d\n", rt_entry->gw.s_addr);
                 rip_packet->entries[i].afi = htons(AF_INET);
                 rip_packet->entries[i].tag = 0;
                 rip_packet->entries[i].address = 0;
@@ -391,8 +401,8 @@ void send_rip_update(struct sr_instance *sr){
         }
 
         sr_send_packet(sr, rip_response, sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_udp_hdr_t)+sizeof(sr_rip_pkt_t), current_interface->name);
-        free(rip_response);
     }
+    free(rip_response);
     pthread_mutex_unlock(&(sr->rt_lock));
 }
 
@@ -402,6 +412,7 @@ void update_route_table(struct sr_instance *sr,
                         char* iface){
     pthread_mutex_lock(&(sr->rt_lock));
     /* Fill your code here */
+    printf("updating routing table\n");
     int changed = 0;
     int i;
     for (i = 0; i < MAX_NUM_ENTRIES; i++) {
@@ -415,33 +426,35 @@ void update_route_table(struct sr_instance *sr,
         struct sr_rt* rt_entry;
         int found = 0;
         for (rt_entry = sr->routing_table; rt_entry; rt_entry = rt_entry->next) {
-            if (rip_entry.address == rt_entry->dest.s_addr) {
+            if ((rip_entry.address & rip_entry.mask) == (rt_entry->dest.s_addr & rt_entry->mask.s_addr)) {
                 found = 1;
                 break;
             }
         }
-        /* a. if RT doesn't contain distance to RIP entry's destination */
+        /* a. if RT doesn't contain an entry to RIP entry's destination */
         if (!found && metric < INFINITY) {
+            printf("changed: 1a\n");
             changed = 1;
             struct in_addr dest, gw, mask;
             dest.s_addr = rip_entry.address;
             gw.s_addr = ip_packet->ip_src;
             mask.s_addr = rip_entry.mask;
-            pthread_mutex_unlock(&(sr->rt_lock));
             sr_add_rt_entry(sr, dest, gw, mask, metric, iface);
-            pthread_mutex_lock(&(sr->rt_lock));
+            /* pthread_mutex_unlock(&(sr->rt_lock));
+            sr_add_rt_entry(sr, dest, gw, mask, metric, iface);
+            pthread_mutex_lock(&(sr->rt_lock)); */
             changed = 1;
         }
         /* b. if RT contains a distance to the RIP entry's destination */
         else if (found) {
             /* i. if RIP packet source is the current next hop to the destination */
-            if (ip_packet->ip_src == rt_entry->gw.s_addr) {
+            if (ntohl(ip_packet->ip_src) == rt_entry->gw.s_addr) {
                 if (metric == INFINITY) {
                     changed = 1;
                     rt_entry->metric = INFINITY;
                     rt_entry->updated_time = time(NULL);
                 }
-                else /* if (rt_entry->metric > metric) */ {
+                else if (metric != rt_entry->metric) {
                     changed = 1;
                     rt_entry->metric = metric;
                     rt_entry->updated_time = time(NULL);
@@ -459,10 +472,6 @@ void update_route_table(struct sr_instance *sr,
                     rt_entry->metric = metric;
                     rt_entry->updated_time = time(NULL);
                 }
-                /* if new path is not shorter */
-                else if (rt_entry->metric <= metric) {
-                    /* do nothing */
-                }
             }
         }
     }
@@ -471,4 +480,6 @@ void update_route_table(struct sr_instance *sr,
     if (changed) {
         send_rip_update(sr);
     }
+    sr_print_routing_table(sr);
+    printf("done updating routing table\n");
 }
