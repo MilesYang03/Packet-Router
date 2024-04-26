@@ -45,15 +45,26 @@ void sr_init(struct sr_instance* sr)
     pthread_attr_setdetachstate(&(sr->attr), PTHREAD_CREATE_JOINABLE);
     pthread_attr_setscope(&(sr->attr), PTHREAD_SCOPE_SYSTEM);
     pthread_attr_setscope(&(sr->attr), PTHREAD_SCOPE_SYSTEM);
-    pthread_t thread;
+    pthread_t arp_thread;
 
-    pthread_create(&thread, &(sr->attr), sr_arpcache_timeout, sr);
+    pthread_create(&arp_thread, &(sr->attr), sr_arpcache_timeout, sr);
+    
+    srand(time(NULL));
+    pthread_mutexattr_init(&(sr->rt_lock_attr));
+    pthread_mutexattr_settype(&(sr->rt_lock_attr), PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&(sr->rt_lock), &(sr->rt_lock_attr));
+
+    pthread_attr_init(&(sr->rt_attr));
+    pthread_attr_setdetachstate(&(sr->rt_attr), PTHREAD_CREATE_JOINABLE);
+    pthread_attr_setscope(&(sr->rt_attr), PTHREAD_SCOPE_SYSTEM);
+    pthread_attr_setscope(&(sr->rt_attr), PTHREAD_SCOPE_SYSTEM);
+    pthread_t rt_thread;
+    pthread_create(&rt_thread, &(sr->rt_attr), sr_rip_timeout, sr);
     
     /* Add initialization code here! */
-    sr_load_rt(sr, "rtable");
-    /*sr_print_routing_table(sr);*/
 
 } /* -- sr_init -- */
+
 
 /*---------------------------------------------------------------------
  * Method: sr_handlepacket(uint8_t* p,char* interface)
