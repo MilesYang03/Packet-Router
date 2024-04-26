@@ -220,7 +220,7 @@ void sr_print_routing_entry(struct sr_rt* entry)
 void *sr_rip_timeout(void *sr_ptr) {
     struct sr_instance *sr = sr_ptr;
     while (1) {
-        /* sleep(5); */
+        sleep(5);
         pthread_mutex_lock(&(sr->rt_lock));
 
         time_t current_time = time(NULL);
@@ -441,7 +441,7 @@ void update_route_table(struct sr_instance *sr,
                     rt_entry->metric = INFINITY;
                     rt_entry->updated_time = time(NULL);
                 }
-                else if (rt_entry->metric > metric) {
+                else /* if (rt_entry->metric > metric) */ {
                     changed = 1;
                     rt_entry->metric = metric;
                     rt_entry->updated_time = time(NULL);
