@@ -163,6 +163,53 @@ struct in_addr gw, struct in_addr mask, uint32_t metric, char* if_name)
      pthread_mutex_unlock(&(sr->rt_lock));
 } /* -- sr_add_entry -- */
 
+void sr_add_rt_entry_no_lock(struct sr_instance* sr, struct in_addr dest, 
+struct in_addr gw, struct in_addr mask, uint32_t metric, char* if_name)
+{
+    struct sr_rt* rt_walker = 0;
+
+    assert(if_name);
+    assert(sr);
+
+    /* empty list special case */
+    if(sr->routing_table == 0)
+    {
+        sr->routing_table = (struct sr_rt*)malloc(sizeof(struct sr_rt));
+        assert(sr->routing_table);
+        sr->routing_table->next = 0;
+        sr->routing_table->dest = dest;
+        sr->routing_table->gw   = gw;
+        sr->routing_table->mask = mask;
+        strncpy(sr->routing_table->interface,if_name,sr_IFACE_NAMELEN);
+        sr->routing_table->metric = metric;
+        time_t now;
+        time(&now);
+        sr->routing_table->updated_time = now;
+
+        return;
+    }
+
+    /* -- find the end of the list -- */
+    rt_walker = sr->routing_table;
+    while(rt_walker->next){
+      rt_walker = rt_walker->next; 
+    }
+
+    rt_walker->next = (struct sr_rt*)malloc(sizeof(struct sr_rt));
+    assert(rt_walker->next);
+    rt_walker = rt_walker->next;
+
+    rt_walker->next = 0;
+    rt_walker->dest = dest;
+    rt_walker->gw   = gw;
+    rt_walker->mask = mask;
+    strncpy(rt_walker->interface,if_name,sr_IFACE_NAMELEN);
+    rt_walker->metric = metric;
+    time_t now;
+    time(&now);
+    rt_walker->updated_time = now;
+}
+
 /*---------------------------------------------------------------------
  * Method:
  *
@@ -262,17 +309,19 @@ void *sr_rip_timeout(void *sr_ptr) {
                     memset(&gw_addr, 0, sizeof(struct in_addr)); 
                     struct in_addr mask_addr;
                     mask_addr.s_addr = interface->mask;
-                    sr_add_rt_entry(sr, dest_addr, gw_addr, mask_addr, 1, interface->name); 
+                    sr_add_rt_entry_no_lock(sr, dest_addr, gw_addr, mask_addr, 1, interface->name); 
                 }
 
             }
         }
 
+        
+
+        pthread_mutex_unlock(&(sr->rt_lock));
+        
         /* 3. Send RIP response on all interfaces */
         printf("send normal RIP update\n");
         send_rip_update(sr);
-
-        pthread_mutex_unlock(&(sr->rt_lock));
     }
     return NULL;
 }
@@ -309,6 +358,7 @@ void send_rip_request(struct sr_instance *sr){
 
     rip_packet->command = 1;
     rip_packet->version = 2;
+    rip_packet->unused = 0;
     int i;
     for (i = 0; i < MAX_NUM_ENTRIES; i++) {
         rip_packet->entries[i].afi = htons(AF_INET);
@@ -366,6 +416,7 @@ void send_rip_update(struct sr_instance *sr){
 
     rip_packet->command = 2;
     rip_packet->version = 2;
+    rip_packet->unused = 0;
 
     struct sr_if* current_interface;
     for (current_interface = sr->if_list; current_interface; current_interface = current_interface->next) {
@@ -380,22 +431,32 @@ void send_rip_update(struct sr_instance *sr){
         struct sr_rt* rt_entry;
         for (rt_entry = sr->routing_table; rt_entry && i < MAX_NUM_ENTRIES; rt_entry = rt_entry->next) {
             /* split horizon */
-            if ((current_interface->ip & current_interface->mask) == (rt_entry->gw.s_addr & rt_entry->mask.s_addr)) {
+            if (rt_entry) {
+                if ((current_interface->ip & current_interface->mask) == (rt_entry->gw.s_addr & rt_entry->mask.s_addr)) {
+                    rip_packet->entries[i].afi = htons(AF_INET);
+                    rip_packet->entries[i].tag = 0;
+                    rip_packet->entries[i].address = 0;
+                    rip_packet->entries[i].mask = 0;
+                    rip_packet->entries[i].next_hop = 0;
+                    rip_packet->entries[i].metric = htonl(INFINITY);
+                    i++;
+                }
+                else {
+                    rip_packet->entries[i].afi = htons(AF_INET);
+                    rip_packet->entries[i].tag = 0;
+                    rip_packet->entries[i].address = rt_entry->dest.s_addr;
+                    rip_packet->entries[i].mask = rt_entry->mask.s_addr;
+                    rip_packet->entries[i].next_hop = rt_entry->gw.s_addr;
+                    rip_packet->entries[i].metric = htonl(rt_entry->metric);
+                    i++;
+                }
+            } else {
                 rip_packet->entries[i].afi = htons(AF_INET);
                 rip_packet->entries[i].tag = 0;
                 rip_packet->entries[i].address = 0;
                 rip_packet->entries[i].mask = 0;
                 rip_packet->entries[i].next_hop = 0;
                 rip_packet->entries[i].metric = htonl(INFINITY);
-                i++;
-            }
-            else {
-                rip_packet->entries[i].afi = htons(AF_INET);
-                rip_packet->entries[i].tag = 0;
-                rip_packet->entries[i].address = rt_entry->dest.s_addr;
-                rip_packet->entries[i].mask = rt_entry->mask.s_addr;
-                rip_packet->entries[i].next_hop = rt_entry->gw.s_addr;
-                rip_packet->entries[i].metric = htonl(rt_entry->metric);
                 i++;
             }
         }
@@ -412,7 +473,6 @@ void update_route_table(struct sr_instance *sr,
                         char* iface){
     pthread_mutex_lock(&(sr->rt_lock));
     /* Fill your code here */
-    printf("updating routing table\n");
     int changed = 0;
     int i;
     for (i = 0; i < MAX_NUM_ENTRIES; i++) {
@@ -424,48 +484,34 @@ void update_route_table(struct sr_instance *sr,
         }
         /* 1. find RIP entry's destination's routing table entry */
         struct sr_rt* rt_entry;
-        int found = 0;
         for (rt_entry = sr->routing_table; rt_entry; rt_entry = rt_entry->next) {
             if ((rip_entry.address & rip_entry.mask) == (rt_entry->dest.s_addr & rt_entry->mask.s_addr)) {
-                found = 1;
                 break;
             }
         }
         /* a. if RT doesn't contain an entry to RIP entry's destination */
-        if (!found && metric < INFINITY) {
-            printf("changed: 1a\n");
+        if (!rt_entry) {
             changed = 1;
             struct in_addr dest, gw, mask;
-            dest.s_addr = rip_entry.address;
+            dest.s_addr = rip_entry.address & rip_entry.mask;
             gw.s_addr = ip_packet->ip_src;
             mask.s_addr = rip_entry.mask;
-            sr_add_rt_entry(sr, dest, gw, mask, metric, iface);
-            /* pthread_mutex_unlock(&(sr->rt_lock));
-            sr_add_rt_entry(sr, dest, gw, mask, metric, iface);
-            pthread_mutex_lock(&(sr->rt_lock)); */
+            sr_add_rt_entry_no_lock(sr, dest, gw, mask, metric, iface);
             changed = 1;
         }
         /* b. if RT contains a distance to the RIP entry's destination */
-        else if (found) {
+        else {
             /* i. if RIP packet source is the current next hop to the destination */
             if (ntohl(ip_packet->ip_src) == rt_entry->gw.s_addr) {
-                if (metric == INFINITY) {
-                    changed = 1;
-                    rt_entry->metric = INFINITY;
-                    rt_entry->updated_time = time(NULL);
-                }
-                else if (metric != rt_entry->metric) {
-                    changed = 1;
-                    rt_entry->metric = metric;
-                    rt_entry->updated_time = time(NULL);
-                }
+                rt_entry->metric = metric;
                 rt_entry->updated_time = time(NULL);
             }
             /* ii. if RIP packet source is not the current next hop to the destination*/
-            else if (ip_packet->ip_src != rt_entry->gw.s_addr) {
+            else {
                 /* if new path is shorter */
                 if (rt_entry->metric > metric) {
                     changed = 1;
+                    rt_entry->dest.s_addr = rip_entry.address;
                     rt_entry->gw.s_addr = ip_packet->ip_src;
                     rt_entry->mask.s_addr = rip_entry.mask;
                     memcpy(rt_entry->interface, iface, sr_IFACE_NAMELEN);
@@ -481,5 +527,4 @@ void update_route_table(struct sr_instance *sr,
         send_rip_update(sr);
     }
     sr_print_routing_table(sr);
-    printf("done updating routing table\n");
 }
