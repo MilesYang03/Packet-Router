@@ -52,3 +52,4 @@ In this function we check all the entries of the RIP packet and increment the me
 In testing this function, we were not able to get our routing table to converge and we noticed with two routers that they would keep incrementing their routing table. We verified this behavior using print statements and wireshark packet analysis.
 
 
+Thank you for reading, and thank you to the TAs for trying to help :)
