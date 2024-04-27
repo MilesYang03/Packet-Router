@@ -8,7 +8,7 @@ Current state:
   - send_rip_request() correct
   - send_rip_update() correct
   - update_routing_table() potential problems
-- Routers converge, BUT there is an unknown error where 1-2 routers will turn off and I can't find why
+- All 3 routers converge correctly, and we have a photo in the router folder called "router converge", BUT there is an unknown error where 1-2 routers will turn off by themselves and we can't find why
 
 We have all the code written for implementing the required functions for lab 3, however we currently are not passing any testcases. Below is a description of what he have written, tried to debug, and any other relevant information for each function.
 
